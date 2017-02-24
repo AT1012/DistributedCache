@@ -12,19 +12,20 @@ import (
 	"net"
 
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	"sort"
+
 	"github.com/gorilla/mux"
 	"github.com/hashicorp/serf/client"
 	"github.com/patrickmn/go-cache"
-	"github.com/stathat/consistent"
+	"stathat.com/c/consistent"
 )
 
 var (
-	ch         consistent.Consistent
+	ch         *consistent.Consistent
 	c          *cache.Cache
 	s          serfClient
 	m          map[int]string
@@ -59,18 +60,25 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	cacheKey := vars["cacheKey"]
 
-	fmt.Println("old list", m)
+	fmt.Println("old list", ch.Members())
 	newNodeList := s.getMemberList()
-	numServers = len(newNodeList)
-	m = map[int]string{}
-	for k, v := range newNodeList {
-		m[k] = v
-	}
-	fmt.Println("new list", m)
+	//numServers = len(newNodeList)
+	//m = map[int]string{}
+	//for k, v := range newNodeList {
+	//	m[k] = v
+	//}
+
+	//update the ch.
+	ch.Set(newNodeList)
+
+	fmt.Println("new list", ch.Members())
 
 	//Find in which node the key resides and do a get request to that node
-	n := int(hash(cacheKey)) % numServers
-	server := m[n]
+
+	server, err := ch.Get(cacheKey)
+	if err != nil {
+		panic(err)
+	}
 	url := "http://" + server + "/" + cacheKey
 	fmt.Println("\nGET URL:>", url)
 
@@ -129,19 +137,23 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	fmt.Println("old list", m)
+	fmt.Println("old list", ch.Members())
 	newNodeList := s.getMemberList()
-	numServers = len(newNodeList)
-	m = map[int]string{}
-	for k, v := range newNodeList {
-		m[k] = v
-	}
-	fmt.Println("new list", m)
+	//numServers = len(newNodeList)
+	//m = map[int]string{}
+	//for k, v := range newNodeList {
+	//	m[k] = v
+	//}
+	ch.Set(newNodeList)
+	fmt.Println("new list", ch.Members())
 
 	//Get the hash of the key, find which node it has to be stored into
-	n := int(hash(t.Key)) % numServers
-	server := m[n]
-
+	//n := int(hash(t.Key)) % numServers
+	//server := m[n]
+	server, err := ch.Get(t.Key)
+	if err != nil {
+		panic(err)
+	}
 	url := "http://" + server + "/set"
 	fmt.Println("\nPOST URL:>", url)
 
@@ -159,7 +171,7 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Fprintf(w, "Saved key: %v  in node %v", t.Key, n)
+	fmt.Fprintf(w, "Saved key: %v  in node %v", t.Key, server)
 
 }
 
@@ -222,11 +234,11 @@ func joinCluster(SEED string) {
 
 }
 
-func (s serfClient) getMemberList() map[int]string {
+func (s serfClient) getMemberList() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	newMap := map[int]string{}
-
+	//newMap := map[int]string{}
+	memList := []string{}
 	members, err := s.rpcClient.Members()
 	if err != nil {
 		panic(err)
@@ -243,22 +255,19 @@ func (s serfClient) getMemberList() map[int]string {
 
 	for i, node := range nodes {
 		port := strings.Replace(strconv.Itoa(node), "2", "1", -1)
-		newMap[i] = hostIP + ":" + port
-		fmt.Printf("\nkey: %v == value : %v", i, newMap[i])
+		memList = append(memList, hostIP+":"+port)
+		fmt.Printf("\nkey: %v == value : %v", i, memList[i])
 	}
 
-	return newMap
+	return memList
 }
 
 func main() {
 	fmt.Println("Setting up a Distributed Cache with a default expiration time of 5 minutes and which purges expired items every 30 seconds")
-	hostIP = "192.168.41.205"
+	hostIP = "192.168.0.101"
 	// Create a cache with a default expiration time of 5 minutes, and which
 	// purges expired items every 30 seconds
 	c = cache.New(5*time.Minute, 30*time.Second)
-
-	//Create consistent hashing instance
-	//ch = consistent.New()
 
 	//Start serf agent
 
@@ -286,7 +295,12 @@ func main() {
 	//Setup Seed node
 	//Set SEED Node
 	SEED := hostIP + ":7002"
-	m = map[int]string{0: hostIP + ":7001"}
+
+	//m = map[int]string{0: hostIP + ":7001"}
+
+	//Create consistent hashing instance
+	ch = consistent.New()
+	ch.Add(hostIP + ":7001")
 
 	if SEED == "" {
 		//Get the self IP and set yourself as the SEED
@@ -306,18 +320,41 @@ func main() {
 				fmt.Println("\nSyncing data across nodes.. Ticker ticked  at", ticker.C)
 				//get member list
 				newNodeList := s.getMemberList()
-
-				if len(newNodeList) != len(m) {
+				oldNodeList := ch.Members()
+				if len(newNodeList) != len(oldNodeList) {
 					//sync data
 				}
 
-				for k, v := range m {
-					// if present in the old map and not in the new map
-					v1, ok := newNodeList[k]
-					if ok {
-						if v1 != v {
-							//sync data
+				for _, oldNode := range oldNodeList {
+					// if present in the oldList and not in the newList
+					found := false
+					for _, newNode := range newNodeList {
 
+						if oldNode == newNode {
+							found = true
+							break
+						}
+
+						if !found {
+							//oldNode is dead
+							//sync data
+						}
+					}
+				}
+
+				for _, newNode := range newNodeList {
+					// if present in the newList and not in the oldList
+					found := false
+					for _, oldNode := range oldNodeList {
+
+						if oldNode == newNode {
+							found = true
+							break
+						}
+
+						if !found {
+							//newNode has newly joined the cluster
+							//sync data
 						}
 					}
 				}
