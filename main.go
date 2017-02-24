@@ -4,23 +4,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
-
-	"net"
 
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 
-	"sort"
-
-	"stathat.com/c/consistent"
 	"github.com/at1012/go-cache"
 	"github.com/gorilla/mux"
 	"github.com/hashicorp/serf/client"
+	"stathat.com/c/consistent"
 )
 
 var (
@@ -53,11 +50,11 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	cacheKey := vars["cacheKey"]
 
-	//TODO: Move the get server code to a separate method
-	//Find in which node the key resides and do a get request to that node
+	//Find in which server the key resides and do a get request to that server
 	server, err := ch.Get(cacheKey)
 	if err != nil {
-		panic(err)
+		fmt.Errorf("Error getting the server. Err : %#v", err)
+		return
 	}
 
 	url := "http://" + server + "/" + cacheKey
@@ -65,23 +62,19 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(err)
+		http.Error(w, err.Error(), 404)
+		return
 	}
 	defer resp.Body.Close()
 
 	// form the getKey struct from the response body
 	t := getKey{}
-	if r.Body == nil {
-		http.Error(w, "Please send a request body", 400)
-		return
-	}
 	err = json.NewDecoder(resp.Body).Decode(&t)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	defer r.Body.Close()
-	fmt.Fprintf(w, "key: %v  val: %v", t.Key, t.Value)
+	fmt.Fprintf(w, "key: %v  == val: %v == server: %v", t.Key, t.Value, server)
 
 }
 
@@ -95,7 +88,7 @@ func getFromCache(w http.ResponseWriter, r *http.Request) {
 	}
 	jData, err := json.Marshal(t)
 	if err != nil {
-		panic(err)
+		fmt.Errorf("Error marshalling the key, val pair. Err : %#v", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -121,23 +114,25 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	////TODO: Move the get server code to a separate method
-	//newNodeList := s.getMemberList()
-	//ch.Set(newNodeList)
-
-	//Get the hash of the key, find which node it has to be stored into
+	//Get the server where the key has to be stored into
 	server, err := ch.Get(t.Key)
 	if err != nil {
-		panic(err)
+		fmt.Errorf("Error getting the server. Err : %#v", err)
+		return
 	}
 	url := "http://" + server + "/set"
 	fmt.Println("\nPOST URL:>", url)
 
 	jsonStr, err := json.Marshal(t)
 	if err != nil {
-		panic(err)
+		fmt.Errorf("Error marshalling the key, value, expiry tuple. Err : %#v", err)
+		return
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
@@ -173,34 +168,18 @@ func setupSerfRPCClient() {
 	serfRPCAddr := hostIP + ":" + serfRPCPort
 	s.rpcClient, err = client.NewRPCClient(serfRPCAddr)
 	if err != nil {
-		fmt.Printf("%#v", err)
-		panic(err)
+		fmt.Errorf("Create new RPC client failed. Err: %#v", err)
+		return
 	}
 
-}
-
-func getSelfIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		os.Stderr.WriteString("Oops: " + err.Error() + "\n")
-		os.Exit(1)
-	}
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return ""
 }
 
 func joinCluster() {
 	if SELF != SEED {
-		num, err := s.rpcClient.Join([]string{SEED}, false)
+		_, err := s.rpcClient.Join([]string{SEED}, false)
 		if err != nil {
-			fmt.Println("Error Joining..: ", num)
-			panic(err)
+			fmt.Errorf("Error joining the cluster. Err: %#v", err)
+			return
 		}
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -213,7 +192,8 @@ func (s serfClient) getMemberList() []string {
 	memList := []string{}
 	members, err := s.rpcClient.Members()
 	if err != nil {
-		panic(err)
+		fmt.Errorf("Error fetching cluster members. Err: %#v", err)
+		return nil
 	}
 
 	//Add each active node to the newmap
@@ -223,7 +203,7 @@ func (s serfClient) getMemberList() []string {
 			nodes = append(nodes, int(mem.Port))
 		}
 	}
-	sort.Ints(nodes)
+	//sort.Ints(nodes)
 
 	for _, node := range nodes {
 		port := strings.Replace(strconv.Itoa(node), "2", "1", -1)
@@ -233,21 +213,35 @@ func (s serfClient) getMemberList() []string {
 	return memList
 }
 
-func main() {
-	fmt.Println("Setting up a Distributed Cache")
+func getSelfIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		fmt.Errorf("Error getting the network interfaces. Err: %#v", err)
+		return ""
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
+}
 
-	//TODO: Remove hardcorded value
-	hostIP = "192.168.41.205"
+func main() {
+	fmt.Println("Setting up a Distributed Cache Cluster")
+
+	hostIP = getSelfIP()
 
 	// Create a cache with a default expiration time of 5 minutes, and which
 	// purges expired items every 30 seconds
 	c = cache.New(5*time.Minute, 30*time.Second)
 
 	//Start serf agent
-	fmt.Println("Starting Serf Agent on this node..")
+	fmt.Println("Starting Serf Agent on this cache server..")
 
-	//TODO: Remove hardcorded value
-	// Move this to a script
+	//TODO: Remove hardcorded value and move this to a script
 	serf := "/Users/Aish/go/myprojects//bin/serf"
 	bindAddr := hostIP + ":" + os.Args[3]
 	rpcAddr := hostIP + ":" + os.Args[4]
@@ -260,8 +254,8 @@ func main() {
 	cmd := exec.Command(serf, cmdArgs...)
 	err := cmd.Start()
 	if err != nil {
-		fmt.Println("an error occurred.\n")
-		panic(err)
+		fmt.Errorf("Error starting the serf agent. Err: %#v", err)
+		return
 	}
 	time.Sleep(500 * time.Millisecond)
 
@@ -276,11 +270,11 @@ func main() {
 		//Get the self IP and set yourself as the SEED
 	}
 	fmt.Println("SEED: ", SEED)
+
+	//Get current IP:Port and if you are not the seed, join the seed node
 	SELF = getSelfIP()
 	SELF = SELF + ":" + os.Args[3]
 	fmt.Println("SELF:", SELF)
-
-	//Get current IP:Port and if you are not the seed, join the seed node
 	joinCluster()
 
 	//Create consistent hashing instance
@@ -290,20 +284,15 @@ func main() {
 
 	}
 
-	//Get active nodes list every 500s and if it differs from the current list, sync data
+	//Get active servers list every 1000ms and if it differs from the current list, update cluster info and sync data
 	go func() {
 		ticker := time.NewTicker(time.Millisecond * 1000)
 		for {
 			select {
 			case <-ticker.C:
-				//get member list
 				newNodeList := s.getMemberList()
 				oldNodeList := ch.Members()
 				self := getSelfIP() + ":" + os.Args[2]
-				if len(newNodeList) != len(oldNodeList) {
-					//sync data
-				}
-
 				for _, oldNode := range oldNodeList {
 					// if present in the oldList and not in the newList
 					found := false
@@ -316,8 +305,8 @@ func main() {
 					}
 					if !found {
 						//oldNode is dead, remove it from consistent hash circle
-						//sync data
-						ch.Remove(oldNode)
+						fmt.Printf("\nServer (%v) left the cluster.", oldNode)
+						ch.Remove(oldNode) // removes the oldNode and all the virtual nodes of it on the circle.
 					}
 				}
 
@@ -332,53 +321,74 @@ func main() {
 					}
 
 					if !found { //newNode has newly joined the cluster -- Sync the data
-						fmt.Printf("\nNew node (%v) joined the serf cluster.\n", newNode)
+						fmt.Printf("\nServer (%v) joined the cluster.\n", newNode)
 
-						nextNode, err := ch.Get(newNode)
-						if err != nil {
-							panic(err)
-						}
+						//var nextNodes []string
+						nextNodes := make(map[string]interface{})
 
 						//Add the new node to the consistent hash circle.
-						ch.Add(newNode)
+						ch.Add(newNode) //Adds the virtual nodes for this as well
 						time.Sleep(500 * time.Millisecond)
 
-						//Get all elements from the next node and rehash them and store again based on the new hash
-						//if current node is the next node
-						if self == nextNode {
-							fmt.Println("Current node might be affected by the addition of new node to serf cluster. Syncing data across nodes..")
-							m := c.GetNotExpiredItems()
+						for i := 0; i < ch.NumberOfReplicas; i++ {
+							nextNode, err := ch.Get(strconv.Itoa(i) + newNode)
+							if err != nil {
+								fmt.Errorf("Error getting the server. Err: %#v", err)
+								return
+							}
+							if _, ok := nextNodes[nextNode]; !ok {
+								nextNodes[nextNode] = nil
+							}
+						}
 
-							//TODO: While it is rehashing, it should not accept post/get requests. Otherwise, it may leave a stale value.
-							// This is not handled currently.
-							for k, v := range m {
-								//Get the hash of the key, find which node it has to be stored into
-								server, err := ch.Get(k)
-								if err != nil {
-									panic(err)
-								}
-								url := "http://" + server + "/set"
-								fmt.Println("\nPOST URL:>", url)
+						for nextNode := range nextNodes {
+							fmt.Println("next node: ", nextNode)
+							//Get all elements from the next node and rehash them and store again based on the new hash
+							//if current node is the next node
+							if self == nextNode && newNode != nextNode{
+								fmt.Println("Current servers's data may be reshuffled across servers, if necessary..")
+								m := c.GetNotExpiredItems()
 
-								t := saveKey{k, v.Object, time.Duration(v.Expiration)}
-								jsonStr, err := json.Marshal(t)
-								if err != nil {
-									panic(err)
-								}
-								req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
-								req.Header.Set("Content-Type", "application/json")
+								//TODO: While it is rehashing, it should not accept post/get requests. Otherwise, it may leave a stale value.
+								// This is not handled currently.
+								for k, v := range m {
+									//Get the hash of the key, find which node it has to be stored into
+									server, err := ch.Get(k)
+									if err != nil {
+										fmt.Errorf("Error getting the server. Err: %#v", err)
+										return
+									}
+									if server != self {
+										fmt.Printf("\nKey : %v will be moved to server :%v", k, server)
+										url := "http://" + server + "/set"
+										fmt.Println("\nPOST URL:>", url)
 
-								client := &http.Client{}
-								resp, err := client.Do(req)
-								if err != nil {
-									panic(err)
+										t := saveKey{k, v.Object, time.Duration(v.Expiration)}
+										jsonStr, err := json.Marshal(t)
+										if err != nil {
+											fmt.Errorf("Error marshalling the key, value, expiry tuple. Err : %#v", err)
+											return
+										}
+										req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+										req.Header.Set("Content-Type", "application/json")
+
+										client := &http.Client{}
+										resp, err := client.Do(req)
+										if err != nil {
+											panic(err)
+										}
+										resp.Body.Close()
+
+										//Remove the key from the current server
+										c.Delete(k)
+									}
+
 								}
-								defer resp.Body.Close()
 
 							}
-
-							fmt.Println("Done syncing data...")
 						}
+
+						fmt.Println("Done syncing data...")
 
 					}
 
@@ -404,10 +414,12 @@ func main() {
 	DCPort := os.Args[1]
 	fmt.Printf("Starting the cache server at port %v", DCPort)
 	err = http.ListenAndServe(":"+DCPort, r)
-	panic(err)
+	fmt.Errorf("Error starting the http server. Err : %#v", err)
+	return
 
 	err = cmd.Wait()
-	panic(err)
+	fmt.Errorf("Error waiting for the asynchronously started serf process. Err : %#v", err)
+	return
 	fmt.Println("Done Serving")
 
 }
