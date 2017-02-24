@@ -17,10 +17,10 @@ import (
 
 	"sort"
 
+	"stathat.com/c/consistent"
 	"github.com/at1012/go-cache"
 	"github.com/gorilla/mux"
 	"github.com/hashicorp/serf/client"
-	"stathat.com/c/consistent"
 )
 
 var (
@@ -53,20 +53,20 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	cacheKey := vars["cacheKey"]
 
-	////TODO: Move the get server code to a separate method
-	//newNodeList := s.getMemberList()
-	////update the ch.
-	//ch.Set(newNodeList)
-
+	//TODO: Move the get server code to a separate method
 	//Find in which node the key resides and do a get request to that node
 	server, err := ch.Get(cacheKey)
 	if err != nil {
 		panic(err)
 	}
+
 	url := "http://" + server + "/" + cacheKey
 	fmt.Println("\nGET URL:>", url)
 
 	resp, err := http.Get(url)
+	if err != nil {
+		panic(err)
+	}
 	defer resp.Body.Close()
 
 	// form the getKey struct from the response body
@@ -237,7 +237,7 @@ func main() {
 	fmt.Println("Setting up a Distributed Cache")
 
 	//TODO: Remove hardcorded value
-	hostIP = "192.168.0.101"
+	hostIP = "192.168.41.205"
 
 	// Create a cache with a default expiration time of 5 minutes, and which
 	// purges expired items every 30 seconds
@@ -304,22 +304,22 @@ func main() {
 					//sync data
 				}
 
-				//for _, oldNode := range oldNodeList {
-				//	// if present in the oldList and not in the newList
-				//	found := false
-				//	for _, newNode := range newNodeList {
-				//
-				//		if oldNode == newNode {
-				//			found = true
-				//			break
-				//		}
-				//
-				//		if !found {
-				//			//oldNode is dead
-				//			//sync data
-				//		}
-				//	}
-				//}
+				for _, oldNode := range oldNodeList {
+					// if present in the oldList and not in the newList
+					found := false
+					for _, newNode := range newNodeList {
+
+						if oldNode == newNode {
+							found = true
+							break
+						}
+					}
+					if !found {
+						//oldNode is dead, remove it from consistent hash circle
+						//sync data
+						ch.Remove(oldNode)
+					}
+				}
 
 				for _, newNode := range newNodeList {
 					// if present in the newList and not in the oldList
