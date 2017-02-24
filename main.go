@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"os"
 	"time"
@@ -25,25 +24,16 @@ import (
 )
 
 var (
-	ch         *consistent.Consistent
-	c          *cache.Cache
-	s          serfClient
-	m          map[int]string
-	numServers int
-	mChannel   chan map[int]string
-	hostIP     string
-	err        error
+	ch     *consistent.Consistent
+	c      *cache.Cache
+	s      serfClient
+	hostIP string
+	err    error
 )
 
 type serfClient struct {
 	rpcClient *client.RPCClient
 	mu        sync.RWMutex
-}
-
-func hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
 }
 
 func homePageHandler(w http.ResponseWriter, r *http.Request) {
@@ -55,26 +45,18 @@ type getKey struct {
 	Value interface{}
 }
 
+//TODO: Give proper err response
+
 func getHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Inside GetHandler")
 	vars := mux.Vars(r)
 	cacheKey := vars["cacheKey"]
 
-	fmt.Println("old list", ch.Members())
+	//TODO: Move the get server code to a separate method
 	newNodeList := s.getMemberList()
-	//numServers = len(newNodeList)
-	//m = map[int]string{}
-	//for k, v := range newNodeList {
-	//	m[k] = v
-	//}
-
 	//update the ch.
 	ch.Set(newNodeList)
 
-	fmt.Println("new list", ch.Members())
-
 	//Find in which node the key resides and do a get request to that node
-
 	server, err := ch.Get(cacheKey)
 	if err != nil {
 		panic(err)
@@ -137,19 +119,11 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	fmt.Println("old list", ch.Members())
+	//TODO: Move the get server code to a separate method
 	newNodeList := s.getMemberList()
-	//numServers = len(newNodeList)
-	//m = map[int]string{}
-	//for k, v := range newNodeList {
-	//	m[k] = v
-	//}
 	ch.Set(newNodeList)
-	fmt.Println("new list", ch.Members())
 
 	//Get the hash of the key, find which node it has to be stored into
-	//n := int(hash(t.Key)) % numServers
-	//server := m[n]
 	server, err := ch.Get(t.Key)
 	if err != nil {
 		panic(err)
@@ -187,7 +161,6 @@ func saveInCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
-	fmt.Printf("\nSaved key: %v", t.Key)
 	c.Set(t.Key, t.Value, t.Expiry)
 }
 
@@ -237,7 +210,6 @@ func joinCluster(SEED string) {
 func (s serfClient) getMemberList() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	//newMap := map[int]string{}
 	memList := []string{}
 	members, err := s.rpcClient.Members()
 	if err != nil {
@@ -263,15 +235,20 @@ func (s serfClient) getMemberList() []string {
 }
 
 func main() {
-	fmt.Println("Setting up a Distributed Cache with a default expiration time of 5 minutes and which purges expired items every 30 seconds")
+	fmt.Println("Setting up a Distributed Cache")
+
+	//TODO: Remove hardcorded value
 	hostIP = "192.168.0.101"
+
 	// Create a cache with a default expiration time of 5 minutes, and which
 	// purges expired items every 30 seconds
 	c = cache.New(5*time.Minute, 30*time.Second)
 
 	//Start serf agent
-
 	fmt.Println("Starting Serf Agent on this node..")
+
+	//TODO: Remove hardcorded value
+	// Move this to a script
 	serf := "/Users/Aish/go/myprojects//bin/serf"
 	bindAddr := hostIP + ":" + os.Args[3]
 	rpcAddr := hostIP + ":" + os.Args[4]
@@ -294,24 +271,21 @@ func main() {
 
 	//Setup Seed node
 	//Set SEED Node
+	//TODO: Remove hardcorded value
 	SEED := hostIP + ":7002"
-
-	//m = map[int]string{0: hostIP + ":7001"}
-
-	//Create consistent hashing instance
-	ch = consistent.New()
-	ch.Add(hostIP + ":7001")
-
 	if SEED == "" {
 		//Get the self IP and set yourself as the SEED
 	}
 
+	//Create consistent hashing instance
+	ch = consistent.New()
+	//TODO: Remove hardcorded value
+	ch.Add(hostIP + ":7001")
+
 	//Get current IP:Port and if you are not the seed, join the seed node
 	joinCluster(SEED)
 
-	////Assuming the serf agents in all nodes are up at {7002,7003}, {8002,8003}, {9002,9003}
-	////Get active nodes list every 500s and if it differs from the current list, sync data
-
+	//Get active nodes list every 500s and if it differs from the current list, sync data
 	go func() {
 		ticker := time.NewTicker(time.Millisecond * 1000)
 		for {
