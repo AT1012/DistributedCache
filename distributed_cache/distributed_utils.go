@@ -5,6 +5,7 @@ import (
 	"net"
 	"os/exec"
 	"time"
+	"os"
 )
 
 func getSelfIP() (string, error) {
@@ -28,7 +29,8 @@ func startSerfAgent(hostIP, bindPort, rpcPort string) (*exec.Cmd, error) {
 	fmt.Println("Starting Serf Agent on this cache server..")
 
 	//TODO: Remove hardcorded value and move this to a script
-	serf := "/Users/Aish/go/myprojects//bin/serf"
+	gopath := os.Getenv("path")
+	serf := gopath + "/bin/serf"
 	bindAddr := hostIP + ":" + bindPort
 	rpcAddr := hostIP + ":" + rpcPort
 	cmdArgs := []string{"agent",

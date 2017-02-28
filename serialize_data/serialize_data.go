@@ -8,7 +8,8 @@ type GetKey struct {
 }
 
 type SaveKey struct {
-	Key    string        `json:"key"`
-	Value  interface{}   `json:"value"`
-	Expiry time.Duration `json:"expiry"`
+	Key       string        `json:"key"`
+	Value     interface{}   `json:"value"`
+	Expiry    time.Duration `json:"expiry"`
+	IsReplica bool
 }

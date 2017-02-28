@@ -16,8 +16,8 @@ import (
 
 	"bytes"
 
+	"github.com/at1012/DistributedCache/cache"
 	"github.com/at1012/DistributedCache/serialize_data"
-	"github.com/at1012/go-cache"
 	"github.com/hashicorp/serf/client"
 	"stathat.com/c/consistent"
 )
@@ -118,8 +118,8 @@ func New(c *cache.Cache, ch *consistent.Consistent, rf, w, r int) *DistributedCa
 
 	dc.Rf = rf
 	if dc.Rf == 0 {
-		// Default replication factor = 2
-		dc.Rf = 2
+		// Default replication factor = 1
+		dc.Rf = 1
 	}
 
 	dc.W = w
@@ -261,7 +261,8 @@ func (dc *DistributedCache) SetupCache() (*exec.Cmd, error) {
 										fmt.Println("\nPOST URL:>", url)
 
 										//TODO: Handle errors in better way
-										t := serialize_data.SaveKey{k, v.Object, time.Duration(v.Expiration)}
+										//TODO: set IsReplica flag
+										t := serialize_data.SaveKey{k, v.Object, time.Duration(v.Expiration), false}
 										jsonStr, err := json.Marshal(t)
 										if err != nil {
 											fmt.Printf("Error marshalling the key, value, expiry tuple. Err : %#v", err)
