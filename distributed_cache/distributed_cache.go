@@ -16,10 +16,10 @@ import (
 
 	"bytes"
 
-	"github.com/at1012/DistributedCache/cache"
 	"github.com/at1012/DistributedCache/serialize_data"
+	"github.com/at1012/DistributedCache/cache"
 	"github.com/hashicorp/serf/client"
-	"stathat.com/c/consistent"
+	"github.com/at1012/DistributedCache/consistent_hash"
 )
 
 var (
@@ -91,7 +91,7 @@ func (s *serfClient) joinDCCluster(seed string) error {
 
 type DistributedCache struct {
 	C       *cache.Cache
-	Ch      *consistent.Consistent
+	Ch      *consistent_hash.Consistent
 	Rf      int
 	W       int //Write quorum
 	R       int //Read quorum
@@ -101,7 +101,7 @@ type DistributedCache struct {
 	mu      sync.RWMutex
 }
 
-func New(c *cache.Cache, ch *consistent.Consistent, rf, w, r int) *DistributedCache {
+func New(c *cache.Cache, ch *consistent_hash.Consistent, rf, w, r int) *DistributedCache {
 	dc := new(DistributedCache)
 	dc.C = c
 	if dc.C == nil {
@@ -113,7 +113,7 @@ func New(c *cache.Cache, ch *consistent.Consistent, rf, w, r int) *DistributedCa
 	dc.Ch = ch
 	if dc.Ch == nil {
 		// Create a default consistent hash with 20 virtual points
-		dc.Ch = consistent.New()
+		dc.Ch = consistent_hash.New()
 	}
 
 	dc.Rf = rf

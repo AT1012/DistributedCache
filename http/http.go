@@ -9,10 +9,10 @@ import (
 	"os"
 
 	"github.com/at1012/DistributedCache/cache"
+	"github.com/at1012/DistributedCache/consistent_hash"
 	"github.com/at1012/DistributedCache/distributed_cache"
 	"github.com/at1012/DistributedCache/serialize_data"
 	"github.com/gorilla/mux"
-	"stathat.com/c/consistent"
 )
 
 var dc *distributed_cache.DistributedCache
@@ -147,7 +147,7 @@ func saveInCache(w http.ResponseWriter, r *http.Request) {
 	dc.C.Set(t.Key, t.Value, t.Expiry, t.IsReplica)
 }
 
-func StartDistributedCacheServer(c *cache.Cache, ch *consistent.Consistent, rf, w, r int) error {
+func StartDistributedCacheServer(c *cache.Cache, ch *consistent_hash.Consistent, rf, w, r int) error {
 	dc = distributed_cache.New(c, ch, rf, w, r)
 	serfAgent, err := dc.SetupCache()
 	if err != nil {
